@@ -15,6 +15,7 @@
             --danger-color: #ff9999;
             --danger-hover: #ffdddd;
             --danger-text: #ff4444;
+            --highlight-color: #7a88ff;
         }
 
         body, html {
@@ -22,10 +23,10 @@
             padding: 0;
             width: 100%;
             height: 100%;
-            overflow: hidden; /* スマホのスワイプによる「戻る/進む」やスクロールを防止 */
+            overflow: hidden;
             background-color: var(--bg-color);
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            touch-action: none; /* デフォルトのタッチアクションを無効化 */
+            touch-action: none;
         }
 
         #app-container {
@@ -34,7 +35,6 @@
             position: relative;
         }
 
-        /* SVGキャンバスのスタイル */
         svg {
             width: 100%;
             height: 100%;
@@ -44,7 +44,6 @@
             cursor: grabbing;
         }
 
-        /* UIパネル */
         #ui-panel {
             position: absolute;
             top: 20px;
@@ -73,8 +72,14 @@
         .action-btn:active {
             transform: translateY(0);
         }
+        .action-btn.btn-reset {
+            border-color: var(--danger-color);
+            color: var(--danger-text);
+        }
+        .action-btn.btn-reset:hover {
+            background: var(--danger-hover);
+        }
 
-        /* スマホ向けのUIレイアウト調整 */
         @media (max-width: 600px) {
             #ui-panel {
                 top: 10px;
@@ -88,10 +93,9 @@
             }
         }
 
-        /* ノードとテキストのスタイル */
         .node {
             cursor: pointer;
-            -webkit-tap-highlight-color: transparent; /* スマホ特有のタップ時の青枠を消す */
+            -webkit-tap-highlight-color: transparent;
         }
         .node rect.bg-rect {
             fill: var(--node-color);
@@ -99,11 +103,18 @@
             rx: 12;
             ry: 12;
             filter: drop-shadow(0px 4px 6px rgba(0, 0, 0, 0.1));
-            transition: fill 0.2s;
+            transition: fill 0.2s, stroke 0.2s, filter 0.2s; 
         }
         .node:hover rect.bg-rect {
             fill: var(--node-hover);
         }
+        
+        .node.selected rect.bg-rect {
+            stroke: var(--highlight-color);
+            stroke-width: 3px;
+            filter: drop-shadow(0px 0px 10px rgba(122, 136, 255, 0.6));
+        }
+
         .node text.main-text {
             font-size: 14px;
             fill: var(--text-color);
@@ -112,14 +123,12 @@
             user-select: none;
         }
 
-        /* リンク（枝）のスタイル */
         .link {
             fill: none;
             stroke: var(--link-color);
             stroke-width: 3px;
         }
 
-        /* 操作ボタンのスタイル（スマホ対応のため少し大型化） */
         .btn rect {
             fill: white;
             stroke: var(--node-color);
@@ -150,7 +159,6 @@
             fill: var(--danger-hover);
         }
 
-        /* インライン編集用テキストエリア */
         #edit-overlay {
             position: absolute;
             z-index: 10;
@@ -161,7 +169,7 @@
             width: 100%;
             height: 100%;
             background: rgba(255, 255, 255, 0.95);
-            border: 2px solid #7a88ff;
+            border: 2px solid var(--highlight-color);
             border-radius: 12px;
             padding: 10px;
             font-size: 14px;
@@ -182,9 +190,12 @@
 
 <div id="app-container">
     <div id="ui-panel">
+        <button class="action-btn" onclick="undo()">↩️ Undo</button>
+        <button class="action-btn" onclick="redo()">↪️ Redo</button>
         <button class="action-btn" onclick="addNewMapToCenter()">➕ 新規マップ</button>
         <button class="action-btn" onclick="saveData()">💾 保存</button>
         <button class="action-btn" onclick="document.getElementById('file-input').click()">📂 開く</button>
+        <button class="action-btn btn-reset" onclick="resetAll()">🗑️ リセット</button>
         <input type="file" id="file-input" accept=".json" style="display: none;" onchange="loadData(event)">
     </div>
     
@@ -203,7 +214,110 @@
     
     const editOverlay = document.getElementById("edit-overlay");
     const nodeEditor = document.getElementById("node-editor");
+    
     let editingNodeData = null;
+    let selectedNodeId = null; 
+    let selectedNodeData = null;
+
+    // --- 💡 LocalStorage（自動保存）機能 ---
+    const LOCAL_STORAGE_KEY = "mindmap_autosave_data";
+
+    function saveToLocal() {
+        const currentTransform = d3.zoomTransform(svg.node());
+        const exportData = {
+            version: "1.0",
+            idCounter: idCounter,
+            mapsData: mapsData,
+            transform: { x: currentTransform.x, y: currentTransform.y, k: currentTransform.k }
+        };
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(exportData));
+    }
+
+    function resetAll() {
+        if (confirm("すべてのデータを消去して最初からやり直しますか？（この操作は取り消せません）")) {
+            localStorage.removeItem(LOCAL_STORAGE_KEY);
+            mapsData = [];
+            idCounter = 1;
+            undoStack = [];
+            redoStack = [];
+            container.selectAll("*").remove();
+            clearSelection();
+            
+            const initialTransform = d3.zoomIdentity.translate(window.innerWidth / 4, window.innerHeight / 2).scale(1);
+            svg.call(zoom.transform, initialTransform);
+            
+            addNewMap(window.innerWidth / 3, window.innerHeight / 2);
+        }
+    }
+    // ------------------------------------
+
+    // --- Undo / Redo 機能 ---
+    const MAX_HISTORY = 50; 
+    let undoStack = [];
+    let redoStack = []; 
+
+    function saveHistory() {
+        const snapshot = {
+            mapsData: JSON.parse(JSON.stringify(mapsData)),
+            idCounter: idCounter
+        };
+        undoStack.push(snapshot);
+        if (undoStack.length > MAX_HISTORY) {
+            undoStack.shift();
+        }
+        redoStack = []; 
+    }
+
+    function undo() {
+        if (undoStack.length === 0) return; 
+        
+        const currentState = {
+            mapsData: JSON.parse(JSON.stringify(mapsData)),
+            idCounter: idCounter
+        };
+        redoStack.push(currentState);
+
+        const previousState = undoStack.pop();
+        mapsData = previousState.mapsData;
+        idCounter = previousState.idCounter;
+
+        container.selectAll("*").remove();
+        clearSelection();
+        updateAll();
+        saveToLocal(); // 💡 操作後に自動保存
+    }
+
+    function redo() {
+        if (redoStack.length === 0) return;
+
+        const currentState = {
+            mapsData: JSON.parse(JSON.stringify(mapsData)),
+            idCounter: idCounter
+        };
+        undoStack.push(currentState);
+
+        const nextState = redoStack.pop();
+        mapsData = nextState.mapsData;
+        idCounter = nextState.idCounter;
+
+        container.selectAll("*").remove();
+        clearSelection();
+        updateAll();
+        saveToLocal(); // 💡 操作後に自動保存
+    }
+    // ------------------------------------
+
+    function selectNode(d) {
+        selectedNodeId = d.data.id;
+        selectedNodeData = d;
+        container.selectAll("g.node").classed("selected", node => node.data.id === d.data.id);
+    }
+
+    function clearSelection() {
+        selectedNodeId = null;
+        selectedNodeData = null;
+        container.selectAll("g.node").classed("selected", false);
+    }
 
     // --- ズーム＆パン機能 ---
     const zoom = d3.zoom()
@@ -211,11 +325,86 @@
         .on("zoom", (event) => {
             container.attr("transform", event.transform);
             if (editOverlay.style.display === "block") finishEditing();
-        });
+        })
+        .on("end", saveToLocal); // 💡 ズーム・パン終了時にも自動保存
+
     svg.call(zoom).on("dblclick.zoom", null);
 
-    const initialTransform = d3.zoomIdentity.translate(window.innerWidth / 4, window.innerHeight / 2).scale(1);
-    svg.call(zoom.transform, initialTransform);
+    // --- グローバルショートカットキー ---
+    document.addEventListener("keydown", (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'z') {
+            if (editOverlay.style.display !== "block") {
+                e.preventDefault();
+                redo();
+            }
+            return;
+        }
+
+        if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+            if (editOverlay.style.display !== "block") {
+                e.preventDefault();
+                undo();
+            }
+            return; 
+        }
+
+        if (editOverlay.style.display === "block" || e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+            return;
+        }
+
+        if (e.key === "Tab") {
+            e.preventDefault(); 
+            
+            if (!selectedNodeData && mapsData.length > 0) {
+                const firstMap = mapsData[0];
+                const domEl = container.select(`.map-group[data-map-id="${firstMap.mapId}"]`)
+                                       .selectAll("g.node")
+                                       .filter(n => n.data.id === firstMap.data.id).node();
+                if (domEl) selectNode(d3.select(domEl).datum());
+            } 
+            else if (selectedNodeData) {
+                const mapObj = mapsData.find(m => m.mapId === selectedNodeData.mapId);
+                if (mapObj) {
+                    const root = d3.hierarchy(mapObj.data, d => d.children);
+                    const dfsNodes = [];
+                    root.eachBefore(n => dfsNodes.push(n)); 
+                    
+                    let idx = dfsNodes.findIndex(n => n.data.id === selectedNodeData.data.id);
+                    if (idx !== -1) {
+                        if (e.shiftKey) {
+                            idx = (idx - 1 + dfsNodes.length) % dfsNodes.length;
+                        } else {
+                            idx = (idx + 1) % dfsNodes.length;
+                        }
+                        
+                        const nextId = dfsNodes[idx].data.id;
+                        const domEl = container.select(`.map-group[data-map-id="${selectedNodeData.mapId}"]`)
+                                               .selectAll("g.node")
+                                               .filter(n => n.data.id === nextId).node();
+                        if (domEl) selectNode(d3.select(domEl).datum());
+                    }
+                }
+            }
+        }
+
+        if (e.key === " " && selectedNodeData) {
+            e.preventDefault();
+            const domEl = container.select(`.map-group[data-map-id="${selectedNodeData.mapId}"]`)
+                                   .selectAll("g.node")
+                                   .filter(n => n.data.id === selectedNodeData.data.id).node();
+            if (domEl) startEditing(null, d3.select(domEl).datum(), domEl);
+        }
+
+        if (e.key === "Enter" && selectedNodeData) {
+            e.preventDefault();
+            addChild(selectedNodeData);
+        }
+
+        if ((e.key === "Backspace" || e.key === "Delete") && selectedNodeData) {
+            e.preventDefault();
+            deleteNode(selectedNodeData);
+        }
+    });
 
     // --- セーブ＆ロード機能 ---
     function saveData() {
@@ -250,6 +439,9 @@
             try {
                 const loaded = JSON.parse(e.target.result);
                 if (loaded.mapsData && loaded.idCounter) {
+                    undoStack = [];
+                    redoStack = []; 
+                    
                     mapsData = loaded.mapsData;
                     idCounter = loaded.idCounter;
                     
@@ -262,7 +454,9 @@
                         svg.call(zoom.transform, t);
                     }
                     
+                    clearSelection();
                     updateAll();
+                    saveToLocal(); // 💡 ファイルから読み込んだ後も自動保存
                 } else {
                     alert("無効なファイルフォーマットです。");
                 }
@@ -276,7 +470,6 @@
     }
 
     // --- キャンバス背景操作 ---
-    // PC向けダブルクリック
     svg.on("dblclick", function(event) {
         if (event.target.tagName !== 'svg') return;
         const transform = d3.zoomTransform(svg.node());
@@ -286,14 +479,15 @@
         addNewMap(x, y);
     });
 
-    // 背景をタップ（クリック）したときに、編集中ならテキストエリアからフォーカスを外す（確定させる）
     svg.on("click", function(event) {
-        if (event.target.tagName === 'svg' && editOverlay.style.display === "block") {
-            nodeEditor.blur();
+        if (event.target.tagName === 'svg') {
+            if (editOverlay.style.display === "block") {
+                nodeEditor.blur();
+            }
+            clearSelection();
         }
     });
 
-    // スマホ向け「新規マップ追加」ボタン用関数（画面中央に追加）
     function addNewMapToCenter() {
         const transform = d3.zoomTransform(svg.node());
         const x = (window.innerWidth / 2 - transform.x) / transform.k;
@@ -303,6 +497,7 @@
 
     // --- データ操作ロジック ---
     function addNewMap(x, y) {
+        saveHistory(); 
         const newMap = {
             mapId: 'm' + idCounter++,
             x: x,
@@ -311,9 +506,11 @@
         };
         mapsData.push(newMap);
         updateAll();
+        saveToLocal(); // 💡 自動保存
     }
 
     function addChild(d) {
+        saveHistory(); 
         if (!d.data.children) d.data.children = [];
         if (d.data._children) {
             d.data.children = d.data.children.concat(d.data._children);
@@ -321,9 +518,11 @@
         }
         d.data.children.push({ id: 'n' + idCounter++, name: "新しい要素" });
         updateMap(d.mapId, d);
+        saveToLocal(); // 💡 自動保存
     }
 
     function toggleNode(d) {
+        saveHistory(); 
         if (d.data.children && d.data.children.length > 0) {
             d.data._children = d.data.children;
             d.data.children = null;
@@ -334,9 +533,13 @@
             return;
         }
         updateMap(d.mapId, d);
+        saveToLocal(); // 💡 自動保存
     }
 
     function deleteNode(d) {
+        saveHistory(); 
+        if (selectedNodeId === d.data.id) clearSelection();
+        
         if (d.depth === 0) {
             mapsData = mapsData.filter(m => m.mapId !== d.mapId);
             container.select(`.map-group[data-map-id="${d.mapId}"]`)
@@ -347,6 +550,7 @@
             if (idx !== -1) siblings.splice(idx, 1);
             updateMap(d.mapId, d.parent);
         }
+        saveToLocal(); // 💡 自動保存
     }
 
     function updateAll() {
@@ -406,17 +610,16 @@
         nodeEnter.append("rect").attr("class", "bg-rect");
         nodeEnter.append("text").attr("class", "main-text");
 
-        // ボタンのサイズを 24x24 に大型化
         const btnSize = 24;
         const btnOffset = -btnSize / 2;
 
         const btnToggle = nodeEnter.append("g").attr("class", "btn btn-toggle")
-            .on("click", (e, d) => { e.stopPropagation(); toggleNode(d); });
+            .on("click", (e, d) => { e.stopPropagation(); selectNode(d); toggleNode(d); });
         btnToggle.append("rect").attr("width", btnSize).attr("height", btnSize).attr("x", btnOffset).attr("y", btnOffset);
         btnToggle.append("text").attr("y", 5);
 
         const btnAdd = nodeEnter.append("g").attr("class", "btn btn-add")
-            .on("click", (e, d) => { e.stopPropagation(); addChild(d); });
+            .on("click", (e, d) => { e.stopPropagation(); selectNode(d); addChild(d); });
         btnAdd.append("rect").attr("width", btnSize).attr("height", btnSize).attr("x", btnOffset).attr("y", btnOffset);
         btnAdd.append("text").text("＋").attr("y", 5);
 
@@ -429,12 +632,20 @@
             .on("start", dragStart)
             .on("drag", dragging)
             .on("end", dragEnd)
-        ).on("click", function(event, d) {
+        )
+        .on("click", function(event, d) {
             if (event.defaultPrevented) return;
+            selectNode(d);
+        })
+        .on("dblclick", function(event, d) {
+            if (event.defaultPrevented) return;
+            event.stopPropagation();
             startEditing(event, d, this);
         });
 
         const nodeMerge = nodeEnter.merge(node);
+        
+        nodeMerge.classed("selected", d => d.data.id === selectedNodeId);
 
         nodeMerge.select("text.main-text").each(function(d) {
             const el = d3.select(this);
@@ -505,7 +716,6 @@
         nodeMerge.select(".btn-add").transition().duration(duration)
             .attr("transform", d => `translate(${d.width / 2}, 0)`);
             
-        // 展開ボタンの配置（ボタンが大きくなった分、少し外側にずらす）
         nodeMerge.select(".btn-toggle")
             .style("display", d => (d.data.children || d.data._children) ? "block" : "none")
             .transition().duration(duration)
@@ -562,7 +772,9 @@
     // --- ドラッグ制御 ---
     function dragStart(event, d) {
         if (d.depth !== 0) return;
+        saveHistory(); 
         d3.select(this.parentNode).raise();
+        selectNode(d); 
     }
     function dragging(event, d) {
         if (d.depth !== 0) return;
@@ -571,10 +783,13 @@
         mapObj.y += event.dy;
         d3.select(this.parentNode).attr("transform", `translate(${mapObj.x},${mapObj.y})`);
     }
-    function dragEnd(event, d) { }
+    function dragEnd(event, d) {
+        saveToLocal(); // 💡 ドラッグ終了時に自動保存
+    }
 
     // --- 動的インラインテキスト編集機能 ---
     function startEditing(event, d, domElement) {
+        selectNode(d); 
         editingNodeData = d;
         const rectEl = domElement.querySelector(".bg-rect");
         const bcr = rectEl.getBoundingClientRect();
@@ -628,7 +843,11 @@
         let newText = nodeEditor.value.trim();
         if (newText === "") newText = "新しい要素";
         
-        editingNodeData.data.name = newText;
+        if (editingNodeData.data.name !== newText) {
+            saveHistory();
+            editingNodeData.data.name = newText;
+        }
+
         const mapId = editingNodeData.mapId;
         const domElement = container.select(`.map-group[data-map-id="${mapId}"]`)
                                     .selectAll("g.node")
@@ -642,28 +861,58 @@
         editOverlay.style.display = "none";
         
         updateMap(mapId);
+        saveToLocal(); // 💡 編集確定時に自動保存
     }
 
     nodeEditor.addEventListener("keydown", (e) => {
-        if (e.isComposing) return; // IME変換中は無視
+        if (e.isComposing) return;
 
         if (e.key === "Enter" && !e.shiftKey) {
-            // スマホなどのタッチデバイスか判定
             const isTouchDevice = window.matchMedia("(pointer: coarse)").matches;
-            
             if (!isTouchDevice) {
-                // PCの場合はEnterで確定させる
                 e.preventDefault();
-                nodeEditor.blur();
+                nodeEditor.blur(); 
             }
-            // スマホの場合はデフォルトの改行を許可し、枠外タップでの確定を促す
         }
     });
 
     nodeEditor.addEventListener("blur", finishEditing);
 
-    // --- 初期化 ---
-    addNewMap(window.innerWidth / 3, window.innerHeight / 2);
+    // --- 💡 初期化処理（LocalStorageからの復元） ---
+    function initializeApp() {
+        const savedData = localStorage.getItem(LOCAL_STORAGE_KEY);
+        if (savedData) {
+            try {
+                const loaded = JSON.parse(savedData);
+                if (loaded.mapsData && loaded.idCounter) {
+                    mapsData = loaded.mapsData;
+                    idCounter = loaded.idCounter;
+                    
+                    if (loaded.transform) {
+                        const t = d3.zoomIdentity
+                            .translate(loaded.transform.x, loaded.transform.y)
+                            .scale(loaded.transform.k);
+                        svg.call(zoom.transform, t);
+                    } else {
+                        const initialTransform = d3.zoomIdentity.translate(window.innerWidth / 4, window.innerHeight / 2).scale(1);
+                        svg.call(zoom.transform, initialTransform);
+                    }
+                    
+                    updateAll();
+                    return; // 正常に復元できた場合はここで終了
+                }
+            } catch (e) {
+                console.error("保存データの読み込みに失敗しました", e);
+            }
+        }
+        
+        // 保存データがない、またはエラーの場合は新規作成
+        const initialTransform = d3.zoomIdentity.translate(window.innerWidth / 4, window.innerHeight / 2).scale(1);
+        svg.call(zoom.transform, initialTransform);
+        addNewMap(window.innerWidth / 3, window.innerHeight / 2);
+    }
+
+    initializeApp();
 
 </script>
 </body>
