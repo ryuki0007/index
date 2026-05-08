@@ -51,6 +51,9 @@
             z-index: 20;
             display: flex;
             gap: 8px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            max-width: 80%;
         }
         .action-btn {
             background: white;
@@ -64,6 +67,7 @@
             box-shadow: 0 4px 6px rgba(0,0,0,0.05);
             transition: all 0.2s ease;
             white-space: nowrap;
+            margin-bottom: 4px;
         }
         .action-btn:hover {
             background: #eef0ff;
@@ -79,13 +83,18 @@
         .action-btn.btn-reset:hover {
             background: var(--danger-hover);
         }
+        .action-btn.btn-rearrange {
+            border-color: #7a88ff;
+            color: #7a88ff;
+        }
+        .action-btn.btn-rearrange:hover {
+            background: #f0f2ff;
+        }
 
         @media (max-width: 600px) {
             #ui-panel {
                 top: 10px;
                 right: 10px;
-                flex-wrap: wrap;
-                justify-content: flex-end;
             }
             .action-btn {
                 padding: 6px 10px;
@@ -151,6 +160,7 @@
         }
         .btn.btn-delete rect {
             stroke: var(--danger-color);
+            color: var(--danger-text);
         }
         .btn.btn-delete text {
             fill: var(--danger-text);
@@ -192,6 +202,7 @@
     <div id="ui-panel">
         <button class="action-btn" onclick="undo()">↩️ Undo</button>
         <button class="action-btn" onclick="redo()">↪️ Redo</button>
+        <button class="action-btn btn-rearrange" onclick="rearrangeMaps()">✨ 再配置</button>
         <button class="action-btn" onclick="addNewMapToCenter()">➕ 新規マップ</button>
         <button class="action-btn" onclick="saveData()">💾 保存</button>
         <button class="action-btn" onclick="document.getElementById('file-input').click()">📂 開く</button>
@@ -219,7 +230,7 @@
     let selectedNodeId = null; 
     let selectedNodeData = null;
 
-    // --- 💡 LocalStorage（自動保存）機能 ---
+    // --- LocalStorage（自動保存）機能 ---
     const LOCAL_STORAGE_KEY = "mindmap_autosave_data";
 
     function saveToLocal() {
@@ -249,7 +260,57 @@
             addNewMap(window.innerWidth / 3, window.innerHeight / 2);
         }
     }
-    // ------------------------------------
+
+    // --- マップの再配置（左端揃え）機能 ---
+    function rearrangeMaps() {
+        if (mapsData.length === 0) return;
+        saveHistory(); 
+
+        mapsData.sort((a, b) => a.y - b.y);
+
+        let targetLeftEdgeX = 0;
+        const firstMap = mapsData[0];
+        const firstMapGroup = container.select(`.map-group[data-map-id="${firstMap.mapId}"]`);
+        
+        if (!firstMapGroup.empty()) {
+            const firstRootDatum = firstMapGroup.select("g.node").datum();
+            const firstRootWidth = firstRootDatum ? firstRootDatum.width : 80;
+            targetLeftEdgeX = firstMap.x - (firstRootWidth / 2);
+        } else {
+            targetLeftEdgeX = firstMap.x;
+        }
+        
+        let currentY = window.innerHeight * 0.1; 
+
+        mapsData.forEach(mapObj => {
+            const mapGroup = container.select(`.map-group[data-map-id="${mapObj.mapId}"]`);
+            if (!mapGroup.empty()) {
+                const rootDatum = mapGroup.select("g.node").datum();
+                const rootWidth = rootDatum ? rootDatum.width : 80;
+                
+                mapObj.x = targetLeftEdgeX + (rootWidth / 2);
+
+                const bbox = mapGroup.node().getBBox();
+                mapObj.y = currentY - bbox.y;
+
+                currentY += bbox.height + 100; 
+            }
+        });
+
+        updateAll();
+        saveToLocal();
+
+        const transform = d3.zoomTransform(svg.node());
+        const currentScale = transform.k;
+        
+        const targetX = window.innerWidth * 0.2 - targetLeftEdgeX * currentScale;
+        const targetY = window.innerHeight * 0.2 - mapsData[0].y * currentScale;
+
+        svg.transition().duration(750).call(
+            zoom.transform,
+            d3.zoomIdentity.translate(targetX, targetY).scale(currentScale)
+        );
+    }
 
     // --- Undo / Redo 機能 ---
     const MAX_HISTORY = 50; 
@@ -284,7 +345,7 @@
         container.selectAll("*").remove();
         clearSelection();
         updateAll();
-        saveToLocal(); // 💡 操作後に自動保存
+        saveToLocal(); 
     }
 
     function redo() {
@@ -303,9 +364,8 @@
         container.selectAll("*").remove();
         clearSelection();
         updateAll();
-        saveToLocal(); // 💡 操作後に自動保存
+        saveToLocal(); 
     }
-    // ------------------------------------
 
     function selectNode(d) {
         selectedNodeId = d.data.id;
@@ -326,7 +386,7 @@
             container.attr("transform", event.transform);
             if (editOverlay.style.display === "block") finishEditing();
         })
-        .on("end", saveToLocal); // 💡 ズーム・パン終了時にも自動保存
+        .on("end", saveToLocal); 
 
     svg.call(zoom).on("dblclick.zoom", null);
 
@@ -349,6 +409,145 @@
         }
 
         if (editOverlay.style.display === "block" || e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+            return;
+        }
+
+        // Alt + R: 再配置
+        if (e.altKey && e.code === 'KeyR') {
+            e.preventDefault();
+            rearrangeMaps();
+            return;
+        }
+
+        // Alt + J: ルートノード間をジャンプ移動
+        if (e.altKey && e.code === 'KeyJ') {
+            e.preventDefault();
+            if (mapsData.length === 0) return;
+
+            let nextMapIndex = 0;
+
+            if (selectedNodeData) {
+                const currentMapId = selectedNodeData.mapId;
+                const currentIndex = mapsData.findIndex(m => m.mapId === currentMapId);
+
+                if (currentIndex !== -1) {
+                    if (e.shiftKey) {
+                        nextMapIndex = (currentIndex - 1 + mapsData.length) % mapsData.length;
+                    } else {
+                        nextMapIndex = (currentIndex + 1) % mapsData.length;
+                    }
+                }
+            }
+
+            const nextMap = mapsData[nextMapIndex];
+            const targetNodeId = nextMap.data.id;
+
+            const domEl = container.select(`.map-group[data-map-id="${nextMap.mapId}"]`)
+                                   .selectAll("g.node")
+                                   .filter(n => n.data.id === targetNodeId).node();
+            if (domEl) {
+                const nodeData = d3.select(domEl).datum();
+                selectNode(nodeData);
+
+                const transform = d3.zoomTransform(svg.node());
+                const currentScale = transform.k;
+                
+                const nodeLeftEdgeX = nextMap.x - (nodeData.width / 2);
+                
+                // 💡 ご指定の通り画面位置を 0.1 と 0.3 に調整
+                const screenTargetX = window.innerWidth * 0.1; 
+                const screenTargetY = window.innerHeight * 0.3;
+
+                const targetX = screenTargetX - nodeLeftEdgeX * currentScale;
+                const targetY = screenTargetY - nextMap.y * currentScale;
+
+                svg.transition().duration(500).call(
+                    zoom.transform,
+                    d3.zoomIdentity.translate(targetX, targetY).scale(currentScale)
+                );
+            }
+            return;
+        }
+
+        // 💡 Alt + N: 新規マップを追加（完璧な左端揃え）
+        if (e.altKey && e.code === 'KeyN') {
+            e.preventDefault();
+            let targetX, targetY;
+            let targetLeftEdge = null; // 基準の左端を保存する変数
+            
+            if (mapsData.length > 0) {
+                const baseMap = selectedNodeData 
+                    ? mapsData.find(m => m.mapId === selectedNodeData.mapId) 
+                    : mapsData[mapsData.length - 1];
+                
+                if (baseMap) {
+                    // 基準マップの左端を計算
+                    const baseMapGroup = container.select(`.map-group[data-map-id="${baseMap.mapId}"]`);
+                    const baseRootDatum = baseMapGroup.select("g.node").datum();
+                    const baseRootWidth = baseRootDatum ? baseRootDatum.width : 80;
+                    targetLeftEdge = baseMap.x - (baseRootWidth / 2);
+                    
+                    // 一旦予測値（文字「新しい要素」の描画幅の目安=110pxの半分）で仮配置
+                    targetX = targetLeftEdge + 55; 
+                    
+                    // 左端のラインが近いマップ群をフィルタリングして一番下を探す
+                    const sameLineMaps = mapsData.filter(m => {
+                        const mGroup = container.select(`.map-group[data-map-id="${m.mapId}"]`);
+                        const mDatum = mGroup.select("g.node").datum();
+                        const mWidth = mDatum ? mDatum.width : 80;
+                        const mLeftEdge = m.x - (mWidth / 2);
+                        return Math.abs(mLeftEdge - targetLeftEdge) < 10;
+                    });
+                    
+                    const maxY = Math.max(...sameLineMaps.map(m => m.y));
+                    targetY = maxY + 140; 
+                } else {
+                    targetX = window.innerWidth / 3;
+                    targetY = window.innerHeight / 2;
+                }
+            } else {
+                const transform = d3.zoomTransform(svg.node());
+                targetX = (window.innerWidth / 2 - transform.x) / transform.k;
+                targetY = (window.innerHeight / 2 - transform.y) / transform.k;
+            }
+            
+            addNewMap(targetX, targetY);
+            
+            setTimeout(() => {
+                const newMap = mapsData[mapsData.length - 1];
+                const domEl = container.select(`.map-group[data-map-id="${newMap.mapId}"]`)
+                                       .selectAll("g.node")
+                                       .filter(n => n.data.id === newMap.data.id).node();
+                if (domEl) {
+                    const nodeData = d3.select(domEl).datum();
+                    
+                    // 💡 レンダリング後の実際の幅(nodeData.width)を用いて、X座標を完璧に左端揃えに補正する
+                    if (targetLeftEdge !== null) {
+                        newMap.x = targetLeftEdge + (nodeData.width / 2);
+                        // すぐに位置を反映
+                        container.select(`.map-group[data-map-id="${newMap.mapId}"]`)
+                                 .attr("transform", `translate(${newMap.x},${newMap.y})`);
+                    }
+
+                    selectNode(nodeData);
+                    
+                    const transform = d3.zoomTransform(svg.node());
+                    const currentScale = transform.k;
+                    
+                    const nodeLeftEdgeX = newMap.x - (nodeData.width / 2);
+                    // 💡 ご指定の通り画面位置を 0.1 と 0.3 に調整
+                    const screenTargetX = window.innerWidth * 0.1;
+                    const screenTargetY = window.innerHeight * 0.3;
+
+                    const focusX = screenTargetX - nodeLeftEdgeX * currentScale;
+                    const focusY = screenTargetY - newMap.y * currentScale;
+
+                    svg.transition().duration(500).call(
+                        zoom.transform,
+                        d3.zoomIdentity.translate(focusX, focusY).scale(currentScale)
+                    );
+                }
+            }, 50); // DOMが描画されるのを少し待ってから補正
             return;
         }
 
@@ -456,7 +655,7 @@
                     
                     clearSelection();
                     updateAll();
-                    saveToLocal(); // 💡 ファイルから読み込んだ後も自動保存
+                    saveToLocal(); 
                 } else {
                     alert("無効なファイルフォーマットです。");
                 }
@@ -506,7 +705,7 @@
         };
         mapsData.push(newMap);
         updateAll();
-        saveToLocal(); // 💡 自動保存
+        saveToLocal(); 
     }
 
     function addChild(d) {
@@ -518,7 +717,7 @@
         }
         d.data.children.push({ id: 'n' + idCounter++, name: "新しい要素" });
         updateMap(d.mapId, d);
-        saveToLocal(); // 💡 自動保存
+        saveToLocal(); 
     }
 
     function toggleNode(d) {
@@ -533,7 +732,7 @@
             return;
         }
         updateMap(d.mapId, d);
-        saveToLocal(); // 💡 自動保存
+        saveToLocal(); 
     }
 
     function deleteNode(d) {
@@ -550,7 +749,7 @@
             if (idx !== -1) siblings.splice(idx, 1);
             updateMap(d.mapId, d.parent);
         }
-        saveToLocal(); // 💡 自動保存
+        saveToLocal(); 
     }
 
     function updateAll() {
@@ -784,7 +983,7 @@
         d3.select(this.parentNode).attr("transform", `translate(${mapObj.x},${mapObj.y})`);
     }
     function dragEnd(event, d) {
-        saveToLocal(); // 💡 ドラッグ終了時に自動保存
+        saveToLocal(); 
     }
 
     // --- 動的インラインテキスト編集機能 ---
@@ -861,7 +1060,7 @@
         editOverlay.style.display = "none";
         
         updateMap(mapId);
-        saveToLocal(); // 💡 編集確定時に自動保存
+        saveToLocal(); 
     }
 
     nodeEditor.addEventListener("keydown", (e) => {
@@ -878,7 +1077,7 @@
 
     nodeEditor.addEventListener("blur", finishEditing);
 
-    // --- 💡 初期化処理（LocalStorageからの復元） ---
+    // --- 初期化処理（LocalStorageからの復元） ---
     function initializeApp() {
         const savedData = localStorage.getItem(LOCAL_STORAGE_KEY);
         if (savedData) {
@@ -899,14 +1098,13 @@
                     }
                     
                     updateAll();
-                    return; // 正常に復元できた場合はここで終了
+                    return; 
                 }
             } catch (e) {
                 console.error("保存データの読み込みに失敗しました", e);
             }
         }
         
-        // 保存データがない、またはエラーの場合は新規作成
         const initialTransform = d3.zoomIdentity.translate(window.innerWidth / 4, window.innerHeight / 2).scale(1);
         svg.call(zoom.transform, initialTransform);
         addNewMap(window.innerWidth / 3, window.innerHeight / 2);
