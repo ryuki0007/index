@@ -418,14 +418,14 @@
         // 装飾キー（Ctrl, Cmd, Alt）が押されていないかチェック
         const noModifiers = !e.ctrlKey && !e.metaKey && !e.altKey;
 
-        // 💡 R: 再配置 (単一キー)
+        // R: 再配置 (単一キー)
         if (noModifiers && e.code === 'KeyR') {
             e.preventDefault();
             rearrangeMaps();
             return;
         }
 
-        // 💡 J or Shift + J: ルートノード間をジャンプ移動 (単一キー)
+        // J or Shift + J: ルートノード間をジャンプ移動 (単一キー)
         if (!e.ctrlKey && !e.metaKey && !e.altKey && e.code === 'KeyJ') {
             e.preventDefault();
             if (mapsData.length === 0) return;
@@ -474,7 +474,7 @@
             return;
         }
 
-        // 💡 N: 新規マップを追加 (単一キー)
+        // N: 新規マップを追加 (単一キー)
         if (noModifiers && e.code === 'KeyN') {
             e.preventDefault();
             let targetX, targetY;
@@ -550,8 +550,8 @@
             return;
         }
 
-        // Tab: 移動
-        if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key === "Tab") {
+        // 💡 I or Shift + I: ノード間を移動 (単一キー)
+        if (!e.ctrlKey && !e.metaKey && !e.altKey && e.code === "KeyI") {
             e.preventDefault(); 
             
             if (!selectedNodeData && mapsData.length > 0) {
