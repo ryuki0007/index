@@ -329,16 +329,15 @@
     function randomSearch() {
         if (!isTestMode || mapsData.length === 0) return;
 
-        // 💡 未回答（隠れている状態）のノードを含むマップだけをフィルタリングする
         const incompleteMaps = mapsData.filter(mapObj => {
             let hasHidden = false;
             
-            // ツリー全体を再帰的に探索
             function checkNode(n, depth) {
                 if (hasHidden) return;
                 
-                // ルート以外 ＆ 疑問形でない ＆ まだ表示されていない ＝ 「グレーの隠しノード」
-                if (depth > 0 && !/[?？]/.test(n.name) && !revealedNodes.has(n.id)) {
+                // 💡 末尾がハテナかどうかで判定
+                const isQuestion = /[?？]$/.test(n.name.trim());
+                if (depth > 0 && !isQuestion && !revealedNodes.has(n.id)) {
                     hasHidden = true;
                     return;
                 }
@@ -351,13 +350,11 @@
             return hasHidden;
         });
 
-        // 全て解き終わっていた場合の処理
         if (incompleteMaps.length === 0) {
             alert("すべての問題を解き終わりました！🎉");
             return;
         }
 
-        // 未回答が含まれるマップの中からランダムに選択してジャンプ
         const randomIndex = Math.floor(Math.random() * incompleteMaps.length);
         const targetMapId = incompleteMaps[randomIndex].mapId;
         jumpToMap(targetMapId);
@@ -771,7 +768,9 @@
         if (noModifiers && e.key === " " && selectedNodeData) {
             e.preventDefault();
             if (isTestMode) {
-                const isHidden = selectedNodeData.depth !== 0 && !/[?？]/.test(selectedNodeData.data.name) && !revealedNodes.has(selectedNodeData.data.id);
+                // 💡 末尾がハテナかどうかで判定するように修正
+                const isQuestion = /[?？]$/.test(selectedNodeData.data.name.trim());
+                const isHidden = selectedNodeData.depth !== 0 && !isQuestion && !revealedNodes.has(selectedNodeData.data.id);
                 if (isHidden) {
                     revealedNodes.add(selectedNodeData.data.id);
                     updateMap(selectedNodeData.mapId);
@@ -948,7 +947,9 @@
                      if (event.defaultPrevented) return; 
                      selectNode(d); 
                      if (isTestMode) {
-                         const isHidden = d.depth !== 0 && !/[?？]/.test(d.data.name) && !revealedNodes.has(d.data.id);
+                         // 💡 末尾がハテナかどうかで判定するように修正
+                         const isQuestion = /[?？]$/.test(d.data.name.trim());
+                         const isHidden = d.depth !== 0 && !isQuestion && !revealedNodes.has(d.data.id);
                          if (isHidden) {
                              revealedNodes.add(d.data.id);
                              updateMap(d.mapId);
@@ -964,11 +965,14 @@
 
         const nodeMerge = nodeEnter.merge(node);
         
+        // 💡 選択状態および質問色付け（末尾ハテナ限定）
         nodeMerge.classed("selected", d => d.data.id === selectedNodeId)
-                 .classed("question", d => /[?？]/.test(d.data.name));
+                 .classed("question", d => /[?？]$/.test(d.data.name.trim()));
 
+        // 💡 テスト中の隠しノード判定（末尾ハテナ限定）
         nodeMerge.classed("test-hidden", d => {
-            return isTestMode && d.depth !== 0 && !/[?？]/.test(d.data.name) && !revealedNodes.has(d.data.id);
+            const isQuestion = /[?？]$/.test(d.data.name.trim());
+            return isTestMode && d.depth !== 0 && !isQuestion && !revealedNodes.has(d.data.id);
         });
 
         const rootNames = mapsData.map(m => ({ name: m.data.name, mapId: m.mapId })).filter(m => m.name && m.name.trim() !== "" && m.name !== "新しい要素");
