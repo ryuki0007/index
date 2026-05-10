@@ -10,12 +10,16 @@
             --bg-color: #f8f9fa;
             --node-color: #c3c9ff;
             --node-hover: #aab4ff;
+            --question-color: #90caf9; 
+            --question-hover: #64b5f6;
             --link-color: #c3c9ff;
             --text-color: #333333;
             --danger-color: #ff9999;
             --danger-hover: #ffdddd;
             --danger-text: #ff4444;
             --highlight-color: #7a88ff;
+            --test-hidden-bg: #e0e0e0;
+            --test-hidden-stroke: #bdbdbd;
         }
 
         body, html {
@@ -91,6 +95,19 @@
             background: #f0f2ff;
         }
 
+        .node.test-hidden rect.bg-rect {
+            fill: var(--test-hidden-bg) !important;
+            stroke: var(--test-hidden-stroke) !important;
+            stroke-dasharray: 6 4 !important; 
+            stroke-width: 2px !important;
+        }
+        .node.test-hidden text.main-text {
+            opacity: 0 !important; 
+        }
+        .node.test-hidden .link-tspan {
+            pointer-events: none !important; 
+        }
+
         @media (max-width: 600px) {
             #ui-panel {
                 top: 10px;
@@ -118,6 +135,13 @@
             fill: var(--node-hover);
         }
         
+        .node.question rect.bg-rect {
+            fill: var(--question-color);
+        }
+        .node.question:hover rect.bg-rect {
+            fill: var(--question-hover);
+        }
+
         .node.selected rect.bg-rect {
             stroke: var(--highlight-color);
             stroke-width: 3px;
@@ -128,8 +152,19 @@
             font-size: 14px;
             fill: var(--text-color);
             text-anchor: middle;
-            pointer-events: none;
+            pointer-events: none; 
             user-select: none;
+        }
+
+        .link-tspan {
+            fill: #1a73e8; 
+            font-weight: bold;
+            text-decoration: underline;
+            cursor: pointer;
+            pointer-events: auto; 
+        }
+        .link-tspan:hover {
+            fill: #0d47a1;
         }
 
         .link {
@@ -203,6 +238,11 @@
         <button class="action-btn" onclick="undo()">↩️ Undo</button>
         <button class="action-btn" onclick="redo()">↪️ Redo</button>
         <button class="action-btn btn-rearrange" onclick="rearrangeMaps()">✨ 再配置(R)</button>
+        
+        <button id="btn-test-start" class="action-btn" style="border-color:#ff9800; color:#ff9800;" onclick="startTestMode()">📝 テスト(X)</button>
+        <button id="btn-test-end" class="action-btn" style="display:none; border-color:#4caf50; color:#4caf50;" onclick="endTestMode()">✅ 解除(P)</button>
+        <button id="btn-random-jump" class="action-btn" style="display:none; border-color:#9c27b0; color:#9c27b0;" onclick="randomSearch()">🎲 ランダム(S)</button>
+
         <button class="action-btn" onclick="addNewMapToCenter()">➕ 新規マップ(N)</button>
         <button class="action-btn" onclick="saveData()">💾 保存</button>
         <button class="action-btn" onclick="document.getElementById('file-input').click()">📂 開く</button>
@@ -220,6 +260,9 @@
     let mapsData = [];
     let idCounter = 1;
 
+    let isTestMode = false;
+    let revealedNodes = new Set(); 
+
     const svg = d3.select("#mindmap-svg");
     const container = svg.append("g").attr("class", "container");
     
@@ -230,7 +273,6 @@
     let selectedNodeId = null; 
     let selectedNodeData = null;
 
-    // --- LocalStorage（自動保存）機能 ---
     const LOCAL_STORAGE_KEY = "mindmap_autosave_data";
 
     function saveToLocal() {
@@ -251,6 +293,8 @@
             idCounter = 1;
             undoStack = [];
             redoStack = [];
+            isTestMode = false;
+            revealedNodes.clear();
             container.selectAll("*").remove();
             clearSelection();
             
@@ -261,7 +305,147 @@
         }
     }
 
-    // --- マップの再配置（左端揃え）機能 ---
+    // --- テスト機能のロジック ---
+    function startTestMode() {
+        if (isTestMode) return;
+        isTestMode = true;
+        revealedNodes.clear();
+        document.getElementById('btn-test-start').style.display = 'none';
+        document.getElementById('btn-test-end').style.display = 'inline-block';
+        document.getElementById('btn-random-jump').style.display = 'inline-block';
+        updateAll(); 
+    }
+
+    function endTestMode() {
+        if (!isTestMode) return;
+        isTestMode = false;
+        revealedNodes.clear();
+        document.getElementById('btn-test-start').style.display = 'inline-block';
+        document.getElementById('btn-test-end').style.display = 'none';
+        document.getElementById('btn-random-jump').style.display = 'none';
+        updateAll(); 
+    }
+
+    function randomSearch() {
+        if (!isTestMode || mapsData.length === 0) return;
+
+        // 💡 未回答（隠れている状態）のノードを含むマップだけをフィルタリングする
+        const incompleteMaps = mapsData.filter(mapObj => {
+            let hasHidden = false;
+            
+            // ツリー全体を再帰的に探索
+            function checkNode(n, depth) {
+                if (hasHidden) return;
+                
+                // ルート以外 ＆ 疑問形でない ＆ まだ表示されていない ＝ 「グレーの隠しノード」
+                if (depth > 0 && !/[?？]/.test(n.name) && !revealedNodes.has(n.id)) {
+                    hasHidden = true;
+                    return;
+                }
+                
+                const children = n.children || n._children || [];
+                children.forEach(child => checkNode(child, depth + 1));
+            }
+            
+            checkNode(mapObj.data, 0);
+            return hasHidden;
+        });
+
+        // 全て解き終わっていた場合の処理
+        if (incompleteMaps.length === 0) {
+            alert("すべての問題を解き終わりました！🎉");
+            return;
+        }
+
+        // 未回答が含まれるマップの中からランダムに選択してジャンプ
+        const randomIndex = Math.floor(Math.random() * incompleteMaps.length);
+        const targetMapId = incompleteMaps[randomIndex].mapId;
+        jumpToMap(targetMapId);
+    }
+    // ---------------------------------
+
+    function jumpToMap(targetMapId) {
+        const nextMap = mapsData.find(m => m.mapId === targetMapId);
+        if (!nextMap) return;
+
+        const targetNodeId = nextMap.data.id;
+        const domEl = container.select(`.map-group[data-map-id="${nextMap.mapId}"]`)
+                               .selectAll("g.node")
+                               .filter(n => n.data.id === targetNodeId).node();
+        if (domEl) {
+            const nodeData = d3.select(domEl).datum();
+            selectNode(nodeData);
+
+            const transform = d3.zoomTransform(svg.node());
+            const currentScale = transform.k;
+            
+            const nodeLeftEdgeX = nextMap.x - (nodeData.width / 2);
+            const screenTargetX = window.innerWidth * 0.1; 
+            const screenTargetY = window.innerHeight * 0.3;
+
+            const targetX = screenTargetX - nodeLeftEdgeX * currentScale;
+            const targetY = screenTargetY - nextMap.y * currentScale;
+
+            svg.transition().duration(500).call(
+                zoom.transform,
+                d3.zoomIdentity.translate(targetX, targetY).scale(currentScale)
+            );
+        }
+    }
+
+    function parseTextIntoSegments(text, rootNames) {
+        if (!text) return [{text: " ", target: null}];
+        let segments = [{text: text, target: null}];
+        
+        rootNames.forEach(rn => {
+            let newSegments = [];
+            const keyword = rn.name;
+            const isAlphaNum = /^[a-zA-Z0-9_]+$/.test(keyword);
+
+            segments.forEach(seg => {
+                if (seg.target) {
+                    newSegments.push(seg);
+                    return;
+                }
+                
+                let startIndex = 0;
+                let idx = seg.text.indexOf(keyword, startIndex);
+
+                while (idx !== -1) {
+                    let isValidMatch = true;
+
+                    if (isAlphaNum) {
+                        const prevChar = seg.text[idx - 1];
+                        const nextChar = seg.text[idx + keyword.length];
+                        const isPrevAlphaNum = prevChar && /^[a-zA-Z0-9_]$/.test(prevChar);
+                        const isNextAlphaNum = nextChar && /^[a-zA-Z0-9_]$/.test(nextChar);
+
+                        if (isPrevAlphaNum || isNextAlphaNum) {
+                            isValidMatch = false; 
+                        }
+                    }
+
+                    if (isValidMatch) {
+                        if (idx > startIndex) {
+                            newSegments.push({ text: seg.text.substring(startIndex, idx), target: null });
+                        }
+                        newSegments.push({ text: keyword, target: rn.mapId });
+                        startIndex = idx + keyword.length;
+                        idx = seg.text.indexOf(keyword, startIndex);
+                    } else {
+                        idx = seg.text.indexOf(keyword, idx + 1);
+                    }
+                }
+
+                if (startIndex < seg.text.length) {
+                    newSegments.push({ text: seg.text.substring(startIndex), target: null });
+                }
+            });
+            segments = newSegments;
+        });
+        return segments;
+    }
+
     function rearrangeMaps() {
         if (mapsData.length === 0) return;
         saveHistory(); 
@@ -312,7 +496,79 @@
         );
     }
 
-    // --- Undo / Redo 機能 ---
+    function createNewMapAutoLayout(customText = "新しい要素") {
+        let targetX, targetY;
+        let targetLeftEdge = null; 
+        
+        if (mapsData.length > 0) {
+            const baseMap = selectedNodeData 
+                ? mapsData.find(m => m.mapId === selectedNodeData.mapId) 
+                : mapsData[mapsData.length - 1];
+            
+            if (baseMap) {
+                const baseMapGroup = container.select(`.map-group[data-map-id="${baseMap.mapId}"]`);
+                const baseRootDatum = baseMapGroup.select("g.node").datum();
+                const baseRootWidth = baseRootDatum ? baseRootDatum.width : 80;
+                targetLeftEdge = baseMap.x - (baseRootWidth / 2);
+                
+                targetX = targetLeftEdge + 55; 
+                
+                const sameLineMaps = mapsData.filter(m => {
+                    const mGroup = container.select(`.map-group[data-map-id="${m.mapId}"]`);
+                    const mDatum = mGroup.select("g.node").datum();
+                    const mWidth = mDatum ? mDatum.width : 80;
+                    const mLeftEdge = m.x - (mWidth / 2);
+                    return Math.abs(mLeftEdge - targetLeftEdge) < 10;
+                });
+                
+                const maxY = Math.max(...sameLineMaps.map(m => m.y));
+                targetY = maxY + 140; 
+            } else {
+                targetX = window.innerWidth / 3;
+                targetY = window.innerHeight / 2;
+            }
+        } else {
+            const transform = d3.zoomTransform(svg.node());
+            targetX = (window.innerWidth / 2 - transform.x) / transform.k;
+            targetY = (window.innerHeight / 2 - transform.y) / transform.k;
+        }
+        
+        addNewMap(targetX, targetY, customText);
+        
+        setTimeout(() => {
+            const newMap = mapsData[mapsData.length - 1];
+            const domEl = container.select(`.map-group[data-map-id="${newMap.mapId}"]`)
+                                   .selectAll("g.node")
+                                   .filter(n => n.data.id === newMap.data.id).node();
+            if (domEl) {
+                const nodeData = d3.select(domEl).datum();
+                
+                if (targetLeftEdge !== null) {
+                    newMap.x = targetLeftEdge + (nodeData.width / 2);
+                    container.select(`.map-group[data-map-id="${newMap.mapId}"]`)
+                             .attr("transform", `translate(${newMap.x},${newMap.y})`);
+                }
+
+                selectNode(nodeData);
+                
+                const transform = d3.zoomTransform(svg.node());
+                const currentScale = transform.k;
+                
+                const nodeLeftEdgeX = newMap.x - (nodeData.width / 2);
+                const screenTargetX = window.innerWidth * 0.1;
+                const screenTargetY = window.innerHeight * 0.3;
+
+                const focusX = screenTargetX - nodeLeftEdgeX * currentScale;
+                const focusY = screenTargetY - newMap.y * currentScale;
+
+                svg.transition().duration(500).call(
+                    zoom.transform,
+                    d3.zoomIdentity.translate(focusX, focusY).scale(currentScale)
+                );
+            }
+        }, 50);
+    }
+
     const MAX_HISTORY = 50; 
     let undoStack = [];
     let redoStack = []; 
@@ -379,7 +635,6 @@
         container.selectAll("g.node").classed("selected", false);
     }
 
-    // --- ズーム＆パン機能 ---
     const zoom = d3.zoom()
         .scaleExtent([0.1, 3])
         .on("zoom", (event) => {
@@ -392,7 +647,6 @@
 
     // --- グローバルショートカットキー ---
     document.addEventListener("keydown", (e) => {
-        // Redo (Cmd/Ctrl + Shift + Z)
         if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'z') {
             if (editOverlay.style.display !== "block") {
                 e.preventDefault();
@@ -401,7 +655,6 @@
             return;
         }
 
-        // Undo (Cmd/Ctrl + Z)
         if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
             if (editOverlay.style.display !== "block") {
                 e.preventDefault();
@@ -410,155 +663,91 @@
             return; 
         }
 
-        // 入力中は以降のショートカットを無効化
         if (editOverlay.style.display === "block" || e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+            if (e.target.id === 'node-editor') {
+                const isExtractShortcut = ((e.ctrlKey || e.metaKey) && e.key === 'Enter') || (e.key === '[');
+                if (isExtractShortcut) {
+                    const editor = e.target;
+                    const hasSelection = editor.selectionStart !== editor.selectionEnd;
+                    if (hasSelection) {
+                        e.preventDefault(); 
+                        const selectedText = editor.value.substring(editor.selectionStart, editor.selectionEnd).trim();
+                        if (selectedText) {
+                            finishEditing(); 
+                            createNewMapAutoLayout(selectedText); 
+                        }
+                    }
+                }
+            }
+            return; 
+        }
+
+        const noModifiers = !e.ctrlKey && !e.metaKey && !e.altKey;
+
+        if (noModifiers && e.code === 'KeyX') {
+            e.preventDefault();
+            startTestMode();
+            return;
+        }
+        if (noModifiers && e.code === 'KeyP') {
+            e.preventDefault();
+            endTestMode();
+            return;
+        }
+        if (noModifiers && e.code === 'KeyS') {
+            e.preventDefault();
+            randomSearch();
             return;
         }
 
-        // 装飾キー（Ctrl, Cmd, Alt）が押されていないかチェック
-        const noModifiers = !e.ctrlKey && !e.metaKey && !e.altKey;
+        if (isTestMode) {
+            const isModifyKey = e.key === "Enter" || e.code === "KeyN" || e.key === "Backspace" || e.key === "Delete" || ['Digit1','Digit2','Digit3','Digit4'].includes(e.code);
+            if (isModifyKey) {
+                e.preventDefault();
+                return;
+            }
+        }
 
-        // R: 再配置 (単一キー)
         if (noModifiers && e.code === 'KeyR') {
             e.preventDefault();
             rearrangeMaps();
             return;
         }
 
-        // J or Shift + J: ルートノード間をジャンプ移動 (単一キー)
         if (!e.ctrlKey && !e.metaKey && !e.altKey && e.code === 'KeyJ') {
             e.preventDefault();
             if (mapsData.length === 0) return;
-
             let nextMapIndex = 0;
-
             if (selectedNodeData) {
                 const currentMapId = selectedNodeData.mapId;
                 const currentIndex = mapsData.findIndex(m => m.mapId === currentMapId);
-
                 if (currentIndex !== -1) {
-                    if (e.shiftKey) {
-                        nextMapIndex = (currentIndex - 1 + mapsData.length) % mapsData.length;
-                    } else {
-                        nextMapIndex = (currentIndex + 1) % mapsData.length;
-                    }
+                    if (e.shiftKey) nextMapIndex = (currentIndex - 1 + mapsData.length) % mapsData.length;
+                    else nextMapIndex = (currentIndex + 1) % mapsData.length;
                 }
             }
-
-            const nextMap = mapsData[nextMapIndex];
-            const targetNodeId = nextMap.data.id;
-
-            const domEl = container.select(`.map-group[data-map-id="${nextMap.mapId}"]`)
-                                   .selectAll("g.node")
-                                   .filter(n => n.data.id === targetNodeId).node();
-            if (domEl) {
-                const nodeData = d3.select(domEl).datum();
-                selectNode(nodeData);
-
-                const transform = d3.zoomTransform(svg.node());
-                const currentScale = transform.k;
-                
-                const nodeLeftEdgeX = nextMap.x - (nodeData.width / 2);
-                
-                const screenTargetX = window.innerWidth * 0.1; 
-                const screenTargetY = window.innerHeight * 0.3;
-
-                const targetX = screenTargetX - nodeLeftEdgeX * currentScale;
-                const targetY = screenTargetY - nextMap.y * currentScale;
-
-                svg.transition().duration(500).call(
-                    zoom.transform,
-                    d3.zoomIdentity.translate(targetX, targetY).scale(currentScale)
-                );
-            }
+            jumpToMap(mapsData[nextMapIndex].mapId);
             return;
         }
 
-        // N: 新規マップを追加 (単一キー)
         if (noModifiers && e.code === 'KeyN') {
             e.preventDefault();
-            let targetX, targetY;
-            let targetLeftEdge = null; 
-            
-            if (mapsData.length > 0) {
-                const baseMap = selectedNodeData 
-                    ? mapsData.find(m => m.mapId === selectedNodeData.mapId) 
-                    : mapsData[mapsData.length - 1];
-                
-                if (baseMap) {
-                    const baseMapGroup = container.select(`.map-group[data-map-id="${baseMap.mapId}"]`);
-                    const baseRootDatum = baseMapGroup.select("g.node").datum();
-                    const baseRootWidth = baseRootDatum ? baseRootDatum.width : 80;
-                    targetLeftEdge = baseMap.x - (baseRootWidth / 2);
-                    
-                    targetX = targetLeftEdge + 55; 
-                    
-                    const sameLineMaps = mapsData.filter(m => {
-                        const mGroup = container.select(`.map-group[data-map-id="${m.mapId}"]`);
-                        const mDatum = mGroup.select("g.node").datum();
-                        const mWidth = mDatum ? mDatum.width : 80;
-                        const mLeftEdge = m.x - (mWidth / 2);
-                        return Math.abs(mLeftEdge - targetLeftEdge) < 10;
-                    });
-                    
-                    const maxY = Math.max(...sameLineMaps.map(m => m.y));
-                    targetY = maxY + 140; 
-                } else {
-                    targetX = window.innerWidth / 3;
-                    targetY = window.innerHeight / 2;
-                }
-            } else {
-                const transform = d3.zoomTransform(svg.node());
-                targetX = (window.innerWidth / 2 - transform.x) / transform.k;
-                targetY = (window.innerHeight / 2 - transform.y) / transform.k;
-            }
-            
-            addNewMap(targetX, targetY);
-            
-            setTimeout(() => {
-                const newMap = mapsData[mapsData.length - 1];
-                const domEl = container.select(`.map-group[data-map-id="${newMap.mapId}"]`)
-                                       .selectAll("g.node")
-                                       .filter(n => n.data.id === newMap.data.id).node();
-                if (domEl) {
-                    const nodeData = d3.select(domEl).datum();
-                    
-                    if (targetLeftEdge !== null) {
-                        newMap.x = targetLeftEdge + (nodeData.width / 2);
-                        container.select(`.map-group[data-map-id="${newMap.mapId}"]`)
-                                 .attr("transform", `translate(${newMap.x},${newMap.y})`);
-                    }
-
-                    selectNode(nodeData);
-                    
-                    const transform = d3.zoomTransform(svg.node());
-                    const currentScale = transform.k;
-                    
-                    const nodeLeftEdgeX = newMap.x - (nodeData.width / 2);
-                    const screenTargetX = window.innerWidth * 0.1;
-                    const screenTargetY = window.innerHeight * 0.3;
-
-                    const focusX = screenTargetX - nodeLeftEdgeX * currentScale;
-                    const focusY = screenTargetY - newMap.y * currentScale;
-
-                    svg.transition().duration(500).call(
-                        zoom.transform,
-                        d3.zoomIdentity.translate(focusX, focusY).scale(currentScale)
-                    );
-                }
-            }, 50);
+            createNewMapAutoLayout();
             return;
         }
 
-        // 💡 I or Shift + I: ノード間を移動 (単一キー)
+        if (noModifiers && selectedNodeData) {
+            if (e.code === 'Digit1') { e.preventDefault(); addQuestionNode(selectedNodeData, "何？"); return; }
+            if (e.code === 'Digit2') { e.preventDefault(); addQuestionNode(selectedNodeData, "なぜ？"); return; }
+            if (e.code === 'Digit3') { e.preventDefault(); addQuestionNode(selectedNodeData, "なんの略？"); return; }
+            if (e.code === 'Digit4') { e.preventDefault(); addQuestionNode(selectedNodeData, "読み方は？"); return; }
+        }
+
         if (!e.ctrlKey && !e.metaKey && !e.altKey && e.code === "KeyI") {
             e.preventDefault(); 
-            
             if (!selectedNodeData && mapsData.length > 0) {
                 const firstMap = mapsData[0];
-                const domEl = container.select(`.map-group[data-map-id="${firstMap.mapId}"]`)
-                                       .selectAll("g.node")
-                                       .filter(n => n.data.id === firstMap.data.id).node();
+                const domEl = container.select(`.map-group[data-map-id="${firstMap.mapId}"]`).selectAll("g.node").filter(n => n.data.id === firstMap.data.id).node();
                 if (domEl) selectNode(d3.select(domEl).datum());
             } 
             else if (selectedNodeData) {
@@ -567,111 +756,86 @@
                     const root = d3.hierarchy(mapObj.data, d => d.children);
                     const dfsNodes = [];
                     root.eachBefore(n => dfsNodes.push(n)); 
-                    
                     let idx = dfsNodes.findIndex(n => n.data.id === selectedNodeData.data.id);
                     if (idx !== -1) {
-                        if (e.shiftKey) {
-                            idx = (idx - 1 + dfsNodes.length) % dfsNodes.length;
-                        } else {
-                            idx = (idx + 1) % dfsNodes.length;
-                        }
-                        
+                        if (e.shiftKey) idx = (idx - 1 + dfsNodes.length) % dfsNodes.length;
+                        else idx = (idx + 1) % dfsNodes.length;
                         const nextId = dfsNodes[idx].data.id;
-                        const domEl = container.select(`.map-group[data-map-id="${selectedNodeData.mapId}"]`)
-                                               .selectAll("g.node")
-                                               .filter(n => n.data.id === nextId).node();
+                        const domEl = container.select(`.map-group[data-map-id="${selectedNodeData.mapId}"]`).selectAll("g.node").filter(n => n.data.id === nextId).node();
                         if (domEl) selectNode(d3.select(domEl).datum());
                     }
                 }
             }
         }
 
-        // Space: 編集開始
         if (noModifiers && e.key === " " && selectedNodeData) {
             e.preventDefault();
-            const domEl = container.select(`.map-group[data-map-id="${selectedNodeData.mapId}"]`)
-                                   .selectAll("g.node")
-                                   .filter(n => n.data.id === selectedNodeData.data.id).node();
-            if (domEl) startEditing(null, d3.select(domEl).datum(), domEl);
+            if (isTestMode) {
+                const isHidden = selectedNodeData.depth !== 0 && !/[?？]/.test(selectedNodeData.data.name) && !revealedNodes.has(selectedNodeData.data.id);
+                if (isHidden) {
+                    revealedNodes.add(selectedNodeData.data.id);
+                    updateMap(selectedNodeData.mapId);
+                }
+            } else {
+                const domEl = container.select(`.map-group[data-map-id="${selectedNodeData.mapId}"]`).selectAll("g.node").filter(n => n.data.id === selectedNodeData.data.id).node();
+                if (domEl) startEditing(null, d3.select(domEl).datum(), domEl);
+            }
         }
 
-        // Enter: 子要素追加
         if (noModifiers && e.key === "Enter" && selectedNodeData) {
             e.preventDefault();
             addChild(selectedNodeData);
         }
 
-        // Backspace / Delete: ノード削除
         if (noModifiers && (e.key === "Backspace" || e.key === "Delete") && selectedNodeData) {
             e.preventDefault();
             deleteNode(selectedNodeData);
         }
     });
 
-    // --- セーブ＆ロード機能 ---
     function saveData() {
         const currentTransform = d3.zoomTransform(svg.node());
-        const exportData = {
-            version: "1.0",
-            idCounter: idCounter,
-            mapsData: mapsData,
-            transform: { x: currentTransform.x, y: currentTransform.y, k: currentTransform.k }
-        };
-
+        const exportData = { version: "1.0", idCounter: idCounter, mapsData: mapsData, transform: { x: currentTransform.x, y: currentTransform.y, k: currentTransform.k } };
         const dataStr = JSON.stringify(exportData, null, 2);
         const blob = new Blob([dataStr], { type: "application/json" });
         const url = URL.createObjectURL(blob);
-        
         const a = document.createElement("a");
         a.href = url;
         const date = new Date();
         const timestamp = `${date.getFullYear()}${(date.getMonth()+1).toString().padStart(2,'0')}${date.getDate().toString().padStart(2,'0')}_${date.getHours().toString().padStart(2,'0')}${date.getMinutes().toString().padStart(2,'0')}`;
         a.download = `mindmap_${timestamp}.json`;
         a.click();
-        
         URL.revokeObjectURL(url);
     }
 
     function loadData(event) {
         const file = event.target.files[0];
         if (!file) return;
-
         const reader = new FileReader();
         reader.onload = function(e) {
             try {
                 const loaded = JSON.parse(e.target.result);
                 if (loaded.mapsData && loaded.idCounter) {
-                    undoStack = [];
-                    redoStack = []; 
-                    
-                    mapsData = loaded.mapsData;
-                    idCounter = loaded.idCounter;
-                    
+                    undoStack = []; redoStack = []; 
+                    isTestMode = false; revealedNodes.clear();
+                    document.getElementById('btn-test-start').style.display = 'inline-block';
+                    document.getElementById('btn-test-end').style.display = 'none';
+                    document.getElementById('btn-random-jump').style.display = 'none';
+
+                    mapsData = loaded.mapsData; idCounter = loaded.idCounter;
                     container.selectAll("*").remove();
-                    
                     if (loaded.transform) {
-                        const t = d3.zoomIdentity
-                            .translate(loaded.transform.x, loaded.transform.y)
-                            .scale(loaded.transform.k);
+                        const t = d3.zoomIdentity.translate(loaded.transform.x, loaded.transform.y).scale(loaded.transform.k);
                         svg.call(zoom.transform, t);
                     }
-                    
-                    clearSelection();
-                    updateAll();
-                    saveToLocal(); 
-                } else {
-                    alert("無効なファイルフォーマットです。");
+                    clearSelection(); updateAll(); saveToLocal(); 
                 }
-            } catch (err) {
-                alert("ファイルの読み込みに失敗しました。");
-                console.error(err);
-            }
+            } catch (err) { alert("失敗"); }
             event.target.value = '';
         };
         reader.readAsText(file);
     }
 
-    // --- キャンバス背景操作 ---
     svg.on("dblclick", function(event) {
         if (event.target.tagName !== 'svg') return;
         const transform = d3.zoomTransform(svg.node());
@@ -683,9 +847,7 @@
 
     svg.on("click", function(event) {
         if (event.target.tagName === 'svg') {
-            if (editOverlay.style.display === "block") {
-                nodeEditor.blur();
-            }
+            if (editOverlay.style.display === "block") nodeEditor.blur();
             clearSelection();
         }
     });
@@ -697,15 +859,9 @@
         addNewMap(x, y);
     }
 
-    // --- データ操作ロジック ---
-    function addNewMap(x, y) {
+    function addNewMap(x, y, customText = "新しい要素") {
         saveHistory(); 
-        const newMap = {
-            mapId: 'm' + idCounter++,
-            x: x,
-            y: y,
-            data: { id: 'n' + idCounter++, name: "新しい要素" }
-        };
+        const newMap = { mapId: 'm' + idCounter++, x: x, y: y, data: { id: 'n' + idCounter++, name: customText } };
         mapsData.push(newMap);
         updateAll();
         saveToLocal(); 
@@ -714,26 +870,35 @@
     function addChild(d) {
         saveHistory(); 
         if (!d.data.children) d.data.children = [];
-        if (d.data._children) {
-            d.data.children = d.data.children.concat(d.data._children);
-            d.data._children = null;
-        }
+        if (d.data._children) { d.data.children = d.data.children.concat(d.data._children); d.data._children = null; }
         d.data.children.push({ id: 'n' + idCounter++, name: "新しい要素" });
         updateMap(d.mapId, d);
         saveToLocal(); 
     }
 
+    function addQuestionNode(targetNode, questionText) {
+        saveHistory(); 
+        if (!targetNode.data.children) targetNode.data.children = [];
+        if (targetNode.data._children) { targetNode.data.children = targetNode.data.children.concat(targetNode.data._children); targetNode.data._children = null; }
+        const questionId = 'n' + idCounter++;
+        const answerId = 'n' + idCounter++;
+        const questionNode = { id: questionId, name: questionText, children: [] };
+        const answerNode = { id: answerId, name: "新しい要素" };
+        questionNode.children.push(answerNode);
+        targetNode.data.children.push(questionNode);
+        updateMap(targetNode.mapId, targetNode);
+        saveToLocal(); 
+        setTimeout(() => {
+            const domEl = container.select(`.map-group[data-map-id="${targetNode.mapId}"]`).selectAll("g.node").filter(n => n.data.id === answerId).node();
+            if (domEl) selectNode(d3.select(domEl).datum());
+        }, 50);
+    }
+
     function toggleNode(d) {
         saveHistory(); 
-        if (d.data.children && d.data.children.length > 0) {
-            d.data._children = d.data.children;
-            d.data.children = null;
-        } else if (d.data._children && d.data._children.length > 0) {
-            d.data.children = d.data._children;
-            d.data._children = null;
-        } else {
-            return;
-        }
+        if (d.data.children && d.data.children.length > 0) { d.data._children = d.data.children; d.data.children = null; }
+        else if (d.data._children && d.data._children.length > 0) { d.data.children = d.data._children; d.data._children = null; }
+        else { return; }
         updateMap(d.mapId, d);
         saveToLocal(); 
     }
@@ -741,298 +906,133 @@
     function deleteNode(d) {
         saveHistory(); 
         if (selectedNodeId === d.data.id) clearSelection();
-        
-        if (d.depth === 0) {
-            mapsData = mapsData.filter(m => m.mapId !== d.mapId);
-            container.select(`.map-group[data-map-id="${d.mapId}"]`)
-                     .transition().duration(750).style("opacity", 0).remove();
-        } else {
-            const siblings = d.parent.data.children;
-            const idx = siblings.findIndex(s => s.id === d.data.id);
-            if (idx !== -1) siblings.splice(idx, 1);
-            updateMap(d.mapId, d.parent);
-        }
+        if (d.depth === 0) { mapsData = mapsData.filter(m => m.mapId !== d.mapId); container.select(`.map-group[data-map-id="${d.mapId}"]`).transition().duration(750).style("opacity", 0).remove(); updateAll(); }
+        else { const siblings = d.parent.data.children; const idx = siblings.findIndex(s => s.id === d.data.id); if (idx !== -1) siblings.splice(idx, 1); updateMap(d.mapId, d.parent); }
         saveToLocal(); 
     }
 
-    function updateAll() {
-        mapsData.forEach(mapObj => updateMap(mapObj.mapId));
-    }
+    function updateAll() { mapsData.forEach(mapObj => updateMap(mapObj.mapId)); }
 
-    // --- 描画とレイアウトエンジン ---
     function updateMap(mapId, sourceNode) {
         const mapObj = mapsData.find(m => m.mapId === mapId);
         if (!mapObj) return;
-
         let mapGroup = container.select(`.map-group[data-map-id="${mapId}"]`);
-        if (mapGroup.empty()) {
-            mapGroup = container.append("g")
-                .attr("class", "map-group")
-                .attr("data-map-id", mapId)
-                .attr("transform", `translate(${mapObj.x},${mapObj.y})`);
-        } else {
-            mapGroup.attr("transform", `translate(${mapObj.x},${mapObj.y})`);
-        }
-
+        if (mapGroup.empty()) { mapGroup = container.append("g").attr("class", "map-group").attr("data-map-id", mapId).attr("transform", `translate(${mapObj.x},${mapObj.y})`); }
+        else { mapGroup.attr("transform", `translate(${mapObj.x},${mapObj.y})`); }
         const root = d3.hierarchy(mapObj.data, d => d.children);
         root.mapId = mapId;
         const nodes = root.descendants();
         const links = root.links();
-
         const oldNodesMap = new Map();
-        mapGroup.selectAll("g.node").each(function(d) {
-            oldNodesMap.set(d.data.id, d);
-        });
-
-        nodes.forEach(d => {
-            const old = oldNodesMap.get(d.data.id);
-            if (old) {
-                d.x0 = old.x;
-                d.y0 = old.y;
-            }
-        });
-
+        mapGroup.selectAll("g.node").each(function(d) { oldNodesMap.set(d.data.id, d); });
+        nodes.forEach(d => { const old = oldNodesMap.get(d.data.id); if (old) { d.x0 = old.x; d.y0 = old.y; } });
         let spawnX = 0, spawnY = 0;
-        if (sourceNode) {
-            spawnX = sourceNode.x !== undefined ? sourceNode.x : 0;
-            spawnY = sourceNode.y !== undefined ? sourceNode.y : 0;
-        } else if (nodes.length > 0 && nodes[0].x0 !== undefined) {
-            spawnX = nodes[0].x0;
-            spawnY = nodes[0].y0;
-        }
-
-        const node = mapGroup.selectAll("g.node")
-            .data(nodes, d => d.data.id);
-
-        const nodeEnter = node.enter().append("g")
-            .attr("class", "node")
-            .attr("transform", `translate(${spawnY},${spawnX})`)
-            .style("opacity", 0);
-
+        if (sourceNode) { spawnX = sourceNode.x !== undefined ? sourceNode.x : 0; spawnY = sourceNode.y !== undefined ? sourceNode.y : 0; }
+        const node = mapGroup.selectAll("g.node").data(nodes, d => d.data.id);
+        const nodeEnter = node.enter().append("g").attr("class", "node").attr("transform", `translate(${spawnY},${spawnX})`).style("opacity", 0);
         nodeEnter.append("rect").attr("class", "bg-rect");
         nodeEnter.append("text").attr("class", "main-text");
-
-        const btnSize = 24;
-        const btnOffset = -btnSize / 2;
-
-        const btnToggle = nodeEnter.append("g").attr("class", "btn btn-toggle")
-            .on("click", (e, d) => { e.stopPropagation(); selectNode(d); toggleNode(d); });
+        const btnSize = 24; const btnOffset = -btnSize / 2;
+        const btnToggle = nodeEnter.append("g").attr("class", "btn btn-toggle").on("click", (e, d) => { e.stopPropagation(); selectNode(d); toggleNode(d); });
         btnToggle.append("rect").attr("width", btnSize).attr("height", btnSize).attr("x", btnOffset).attr("y", btnOffset);
         btnToggle.append("text").attr("y", 5);
-
-        const btnAdd = nodeEnter.append("g").attr("class", "btn btn-add")
-            .on("click", (e, d) => { e.stopPropagation(); selectNode(d); addChild(d); });
+        const btnAdd = nodeEnter.append("g").attr("class", "btn btn-add").on("click", (e, d) => { e.stopPropagation(); selectNode(d); addChild(d); });
         btnAdd.append("rect").attr("width", btnSize).attr("height", btnSize).attr("x", btnOffset).attr("y", btnOffset);
         btnAdd.append("text").text("＋").attr("y", 5);
-
-        const btnDel = nodeEnter.append("g").attr("class", "btn btn-delete")
-            .on("click", (e, d) => { e.stopPropagation(); deleteNode(d); });
+        const btnDel = nodeEnter.append("g").attr("class", "btn btn-delete").on("click", (e, d) => { e.stopPropagation(); deleteNode(d); });
         btnDel.append("rect").attr("width", btnSize).attr("height", btnSize).attr("x", btnOffset).attr("y", btnOffset);
         btnDel.append("text").text("×").attr("y", 4);
-
-        nodeEnter.call(d3.drag()
-            .on("start", dragStart)
-            .on("drag", dragging)
-            .on("end", dragEnd)
-        )
-        .on("click", function(event, d) {
-            if (event.defaultPrevented) return;
-            selectNode(d);
-        })
-        .on("dblclick", function(event, d) {
-            if (event.defaultPrevented) return;
-            event.stopPropagation();
-            startEditing(event, d, this);
-        });
+        
+        nodeEnter.call(d3.drag().on("start", dragStart).on("drag", dragging).on("end", dragEnd))
+                 .on("click", function(event, d) { 
+                     if (event.defaultPrevented) return; 
+                     selectNode(d); 
+                     if (isTestMode) {
+                         const isHidden = d.depth !== 0 && !/[?？]/.test(d.data.name) && !revealedNodes.has(d.data.id);
+                         if (isHidden) {
+                             revealedNodes.add(d.data.id);
+                             updateMap(d.mapId);
+                         }
+                     }
+                 })
+                 .on("dblclick", function(event, d) { 
+                     if (event.defaultPrevented) return; 
+                     event.stopPropagation(); 
+                     if (isTestMode) return; 
+                     startEditing(event, d, this); 
+                 });
 
         const nodeMerge = nodeEnter.merge(node);
         
-        nodeMerge.classed("selected", d => d.data.id === selectedNodeId);
+        nodeMerge.classed("selected", d => d.data.id === selectedNodeId)
+                 .classed("question", d => /[?？]/.test(d.data.name));
 
+        nodeMerge.classed("test-hidden", d => {
+            return isTestMode && d.depth !== 0 && !/[?？]/.test(d.data.name) && !revealedNodes.has(d.data.id);
+        });
+
+        const rootNames = mapsData.map(m => ({ name: m.data.name, mapId: m.mapId })).filter(m => m.name && m.name.trim() !== "" && m.name !== "新しい要素");
+        rootNames.sort((a, b) => b.name.length - a.name.length); 
         nodeMerge.select("text.main-text").each(function(d) {
-            const el = d3.select(this);
-            el.selectAll("tspan").remove();
-            
+            const el = d3.select(this); el.selectAll("tspan").remove();
             const lines = d.data.name.split("\n");
             lines.forEach((line, i) => {
-                el.append("tspan")
-                  .attr("x", 0)
-                  .attr("y", `${(i - (lines.length - 1) / 2) * 1.4}em`)
-                  .attr("dominant-baseline", "central")
-                  .text(line || " ");
-            });
-
-            const bbox = this.getBBox();
-            d.width = Math.max(80, bbox.width + 40);
-            d.height = Math.max(32, bbox.height + 24);
-        });
-
-        const verticalPadding = 24; 
-        const horizontalGap = 80;   
-
-        root.eachAfter(d => {
-            if (d.children && d.children.length > 0) {
-                let childrenHeight = 0;
-                d.children.forEach(c => { childrenHeight += c.subtreeHeight; });
-                childrenHeight += (d.children.length - 1) * verticalPadding;
-                d.subtreeHeight = Math.max(d.height, childrenHeight);
-            } else {
-                d.subtreeHeight = d.height;
-            }
-        });
-
-        root.eachBefore(d => {
-            if (d.depth === 0) {
-                d.x = 0;
-                d.y = 0;
-            }
-
-            if (d.children && d.children.length > 0) {
-                let totalChildrenHeight = 0;
-                d.children.forEach(c => { totalChildrenHeight += c.subtreeHeight; });
-                totalChildrenHeight += (d.children.length - 1) * verticalPadding;
-
-                let currentX = d.x - totalChildrenHeight / 2;
-
-                d.children.forEach(c => {
-                    c.x = currentX + c.subtreeHeight / 2;
-                    currentX += c.subtreeHeight + verticalPadding;
-                    c.y = d.y + (d.width / 2) + horizontalGap + (c.width / 2);
+                const segments = parseTextIntoSegments(line, rootNames);
+                segments.forEach((seg, j) => {
+                    const tspan = el.append("tspan").text(seg.text || " ").attr("dominant-baseline", "central");
+                    if (j === 0) { tspan.attr("x", 0).attr("y", `${(i - (lines.length - 1) / 2) * 1.4}em`); }
+                    if (seg.target && !(d.depth === 0 && seg.target === d.mapId)) {
+                        tspan.attr("class", "link-tspan").on("click", (event) => { event.stopPropagation(); jumpToMap(seg.target); }).on("dblclick", (event) => event.stopPropagation()).on("mousedown", (event) => event.stopPropagation()).on("touchstart", (event) => event.stopPropagation());
+                    }
                 });
-            }
-            d.mapId = mapId; 
-        });
-
-        const duration = 750;
-
-        nodeMerge.transition().duration(duration)
-            .attr("transform", d => `translate(${d.y},${d.x})`)
-            .style("opacity", 1);
-
-        nodeMerge.select(".bg-rect").transition().duration(duration)
-            .attr("width", d => d.width)
-            .attr("height", d => d.height)
-            .attr("x", d => -d.width / 2)
-            .attr("y", d => -d.height / 2);
-
-        nodeMerge.select(".btn-add").transition().duration(duration)
-            .attr("transform", d => `translate(${d.width / 2}, 0)`);
-            
-        nodeMerge.select(".btn-toggle")
-            .style("display", d => (d.data.children || d.data._children) ? "block" : "none")
-            .transition().duration(duration)
-            .attr("transform", d => `translate(${d.width / 2 + 28}, 0)`)
-            .select("text")
-            .text(d => d.data._children ? "＋" : "－");
-
-        nodeMerge.select(".btn-delete").transition().duration(duration)
-            .attr("transform", d => `translate(${d.width / 2}, ${-d.height / 2})`);
-
-        node.exit().transition().duration(duration)
-            .attr("transform", `translate(${spawnY},${spawnX})`)
-            .style("opacity", 0)
-            .remove();
-
-        const link = mapGroup.selectAll("path.link")
-            .data(links, d => d.target.data.id);
-
-        const linkEnter = link.enter().insert("path", "g")
-            .attr("class", "link")
-            .attr("d", d => {
-                const o = { x: spawnX, y: spawnY, width: 0 };
-                return generateDiagonalPath({ source: o, target: o });
             });
-
-        link.merge(linkEnter).transition().duration(duration)
-            .attr("d", generateDiagonalPath);
-
-        link.exit().transition().duration(duration)
-            .attr("d", d => {
-                const o = { x: spawnX, y: spawnY, width: 0 };
-                return generateDiagonalPath({ source: o, target: o });
-            })
-            .remove();
-
-        nodes.forEach(d => {
-            d.x0 = d.x;
-            d.y0 = d.y;
+            const bbox = this.getBBox(); d.width = Math.max(80, bbox.width + 40); d.height = Math.max(32, bbox.height + 24);
         });
+        const verticalPadding = 24; const horizontalGap = 80;   
+        root.eachAfter(d => { if (d.children && d.children.length > 0) { let childrenHeight = 0; d.children.forEach(c => { childrenHeight += c.subtreeHeight; }); childrenHeight += (d.children.length - 1) * verticalPadding; d.subtreeHeight = Math.max(d.height, childrenHeight); } else { d.subtreeHeight = d.height; } });
+        root.eachBefore(d => { if (d.depth === 0) { d.x = 0; d.y = 0; } if (d.children && d.children.length > 0) { let totalChildrenHeight = 0; d.children.forEach(c => { totalChildrenHeight += c.subtreeHeight; }); totalChildrenHeight += (d.children.length - 1) * verticalPadding; let currentX = d.x - totalChildrenHeight / 2; d.children.forEach(c => { c.x = currentX + c.subtreeHeight / 2; currentX += c.subtreeHeight + verticalPadding; c.y = d.y + (d.width / 2) + horizontalGap + (c.width / 2); }); } d.mapId = mapId; });
+        const duration = 750;
+        nodeMerge.transition().duration(duration).attr("transform", d => `translate(${d.y},${d.x})`).style("opacity", 1);
+        nodeMerge.select(".bg-rect").transition().duration(duration).attr("width", d => d.width).attr("height", d => d.height).attr("x", d => -d.width / 2).attr("y", d => -d.height / 2);
+        nodeMerge.select(".btn-add").transition().duration(duration).attr("transform", d => `translate(${d.width / 2}, 0)`);
+        nodeMerge.select(".btn-toggle").style("display", d => (d.data.children || d.data._children) ? "block" : "none").transition().duration(duration).attr("transform", d => `translate(${d.width / 2 + 28}, 0)`).select("text").text(d => d.data._children ? "＋" : "－");
+        nodeMerge.select(".btn-delete").transition().duration(duration).attr("transform", d => `translate(${d.width / 2}, ${-d.height / 2})`);
+        node.exit().transition().duration(duration).attr("transform", `translate(${spawnY},${spawnX})`).style("opacity", 0).remove();
+        const link = mapGroup.selectAll("path.link").data(links, d => d.target.data.id);
+        const linkEnter = link.enter().insert("path", "g").attr("class", "link").attr("d", d => { const o = { x: spawnX, y: spawnY, width: 0 }; return generateDiagonalPath({ source: o, target: o }); });
+        link.merge(linkEnter).transition().duration(duration).attr("d", generateDiagonalPath);
+        link.exit().transition().duration(duration).attr("d", d => { const o = { x: spawnX, y: spawnY, width: 0 }; return generateDiagonalPath({ source: o, target: o }); }).remove();
+        nodes.forEach(d => { d.x0 = d.x; d.y0 = d.y; });
     }
 
-    function generateDiagonalPath(d) {
-        const sourceX = d.source.y + (d.source.width || 0) / 2;
-        const sourceY = d.source.x;
-        const targetX = d.target.y - (d.target.width || 0) / 2;
-        const targetY = d.target.x;
+    function generateDiagonalPath(d) { const sourceX = d.source.y + (d.source.width || 0) / 2; const sourceY = d.source.x; const targetX = d.target.y - (d.target.width || 0) / 2; const targetY = d.target.x; return `M ${sourceX} ${sourceY} C ${(sourceX + targetX) / 2} ${sourceY}, ${(sourceX + targetX) / 2} ${targetY}, ${targetX} ${targetY}`; }
+    function dragStart(event, d) { if (d.depth !== 0) return; saveHistory(); d3.select(this.parentNode).raise(); selectNode(d); }
+    function dragging(event, d) { if (d.depth !== 0) return; const mapObj = mapsData.find(m => m.mapId === d.mapId); mapObj.x += event.dx; mapObj.y += event.dy; d3.select(this.parentNode).attr("transform", `translate(${mapObj.x},${mapObj.y})`); }
+    function dragEnd(event, d) { saveToLocal(); }
 
-        return `M ${sourceX} ${sourceY} 
-                C ${(sourceX + targetX) / 2} ${sourceY}, 
-                  ${(sourceX + targetX) / 2} ${targetY}, 
-                  ${targetX} ${targetY}`;
-    }
-
-    // --- ドラッグ制御 ---
-    function dragStart(event, d) {
-        if (d.depth !== 0) return;
-        saveHistory(); 
-        d3.select(this.parentNode).raise();
-        selectNode(d); 
-    }
-    function dragging(event, d) {
-        if (d.depth !== 0) return;
-        const mapObj = mapsData.find(m => m.mapId === d.mapId);
-        mapObj.x += event.dx;
-        mapObj.y += event.dy;
-        d3.select(this.parentNode).attr("transform", `translate(${mapObj.x},${mapObj.y})`);
-    }
-    function dragEnd(event, d) {
-        saveToLocal(); 
-    }
-
-    // --- 動的インラインテキスト編集機能 ---
     function startEditing(event, d, domElement) {
-        selectNode(d); 
-        editingNodeData = d;
+        selectNode(d); editingNodeData = d;
         const rectEl = domElement.querySelector(".bg-rect");
         const bcr = rectEl.getBoundingClientRect();
         const transform = d3.zoomTransform(svg.node());
-
         editingNodeData.screenCenterX = bcr.left + bcr.width / 2;
         editingNodeData.screenCenterY = bcr.top + bcr.height / 2;
         editingNodeData.zoomK = transform.k;
-
         editOverlay.style.display = "block";
         nodeEditor.style.fontSize = (14 * transform.k) + "px";
-
-        let currentText = d.data.name;
-        if (currentText === "新しい要素") currentText = "";
-        
-        nodeEditor.value = currentText;
-        adjustEditorSize();
-
-        nodeEditor.focus();
-        d3.select(domElement).select("text.main-text").style("visibility", "hidden");
+        let currentText = d.data.name; if (currentText === "新しい要素") currentText = "";
+        nodeEditor.value = currentText; adjustEditorSize();
+        nodeEditor.focus(); d3.select(domElement).select("text.main-text").style("visibility", "hidden");
     }
 
     function adjustEditorSize() {
         if (!editingNodeData) return;
-
-        nodeEditor.style.width = '0px';
-        nodeEditor.style.height = '0px';
-
-        let newWidth = nodeEditor.scrollWidth;
-        let newHeight = nodeEditor.scrollHeight;
-
-        const minWidth = 80 * editingNodeData.zoomK;
-        const minHeight = 32 * editingNodeData.zoomK;
-        newWidth = Math.max(newWidth, minWidth);
-        newHeight = Math.max(newHeight, minHeight);
-
-        nodeEditor.style.width = newWidth + 'px';
-        nodeEditor.style.height = newHeight + 'px';
-        editOverlay.style.width = newWidth + 'px';
-        editOverlay.style.height = newHeight + 'px';
-
+        nodeEditor.style.width = '0px'; nodeEditor.style.height = '0px';
+        let newWidth = nodeEditor.scrollWidth; let newHeight = nodeEditor.scrollHeight;
+        const minWidth = 80 * editingNodeData.zoomK; const minHeight = 32 * editingNodeData.zoomK;
+        newWidth = Math.max(newWidth, minWidth); newHeight = Math.max(newHeight, minHeight);
+        nodeEditor.style.width = newWidth + 'px'; nodeEditor.style.height = newHeight + 'px';
+        editOverlay.style.width = newWidth + 'px'; editOverlay.style.height = newHeight + 'px';
         editOverlay.style.left = (editingNodeData.screenCenterX - newWidth / 2) + "px";
         editOverlay.style.top = (editingNodeData.screenCenterY - newHeight / 2) + "px";
     }
@@ -1041,73 +1041,40 @@
 
     function finishEditing() {
         if (!editingNodeData) return;
-        
-        let newText = nodeEditor.value.trim();
-        if (newText === "") newText = "新しい要素";
-        
-        if (editingNodeData.data.name !== newText) {
-            saveHistory();
-            editingNodeData.data.name = newText;
-        }
-
+        let newText = nodeEditor.value.trim(); if (newText === "") newText = "新しい要素";
+        if (editingNodeData.data.name !== newText) { saveHistory(); editingNodeData.data.name = newText; }
         const mapId = editingNodeData.mapId;
-        const domElement = container.select(`.map-group[data-map-id="${mapId}"]`)
-                                    .selectAll("g.node")
-                                    .filter(n => n.data.id === editingNodeData.data.id).node();
-        
-        if (domElement) {
-            d3.select(domElement).select("text.main-text").style("visibility", "visible");
-        }
-
-        editingNodeData = null;
-        editOverlay.style.display = "none";
-        
-        updateMap(mapId);
+        const domElement = container.select(`.map-group[data-map-id="${mapId}"]`).selectAll("g.node").filter(n => n.data.id === editingNodeData.data.id).node();
+        if (domElement) { d3.select(domElement).select("text.main-text").style("visibility", "visible"); }
+        const isRootEdited = editingNodeData.depth === 0;
+        editingNodeData = null; editOverlay.style.display = "none";
+        if (isRootEdited) updateAll(); else updateMap(mapId);
         saveToLocal(); 
     }
 
     nodeEditor.addEventListener("keydown", (e) => {
         if (e.isComposing) return;
-
-        if (e.key === "Enter" && !e.shiftKey) {
+        if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
             const isTouchDevice = window.matchMedia("(pointer: coarse)").matches;
-            if (!isTouchDevice) {
-                e.preventDefault();
-                nodeEditor.blur(); 
-            }
+            if (!isTouchDevice) { e.preventDefault(); nodeEditor.blur(); }
         }
     });
 
     nodeEditor.addEventListener("blur", finishEditing);
 
-    // --- 初期化処理 ---
     function initializeApp() {
         const savedData = localStorage.getItem(LOCAL_STORAGE_KEY);
         if (savedData) {
             try {
                 const loaded = JSON.parse(savedData);
                 if (loaded.mapsData && loaded.idCounter) {
-                    mapsData = loaded.mapsData;
-                    idCounter = loaded.idCounter;
-                    
-                    if (loaded.transform) {
-                        const t = d3.zoomIdentity
-                            .translate(loaded.transform.x, loaded.transform.y)
-                            .scale(loaded.transform.k);
-                        svg.call(zoom.transform, t);
-                    } else {
-                        const initialTransform = d3.zoomIdentity.translate(window.innerWidth / 4, window.innerHeight / 2).scale(1);
-                        svg.call(zoom.transform, initialTransform);
-                    }
-                    
-                    updateAll();
-                    return; 
+                    mapsData = loaded.mapsData; idCounter = loaded.idCounter;
+                    if (loaded.transform) { const t = d3.zoomIdentity.translate(loaded.transform.x, loaded.transform.y).scale(loaded.transform.k); svg.call(zoom.transform, t); }
+                    else { const initialTransform = d3.zoomIdentity.translate(window.innerWidth / 4, window.innerHeight / 2).scale(1); svg.call(zoom.transform, initialTransform); }
+                    updateAll(); return; 
                 }
-            } catch (e) {
-                console.error("保存データの読み込みに失敗しました", e);
-            }
+            } catch (e) { console.error(e); }
         }
-        
         const initialTransform = d3.zoomIdentity.translate(window.innerWidth / 4, window.innerHeight / 2).scale(1);
         svg.call(zoom.transform, initialTransform);
         addNewMap(window.innerWidth / 3, window.innerHeight / 2);
